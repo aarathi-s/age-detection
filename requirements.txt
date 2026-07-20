@@ -3,3 +3,5 @@ numpy
 streamlit
 Pillow
 deepface
+tensorflow==2.15.0
+tf-keras==2.15.0
