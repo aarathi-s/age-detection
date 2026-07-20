@@ -1,7 +1,6 @@
 import streamlit as st
 import cv2
 import numpy as np
-from deepface import DeepFace
 from PIL import Image, ImageDraw, ImageFont
 import json
 
@@ -17,32 +16,31 @@ st.markdown("Upload an image to detect ages and emotions of people in the photo"
 def load_models():
     FACE_PROTO = "models/opencv_face_detector.pbtxt"
     FACE_MODEL = "models/opencv_face_detector_uint8.pb"
+    AGE_PROTO = "models/age_deploy.prototxt"
+    AGE_MODEL = "models/age_net.caffemodel"
+    EMOTION_MODEL = "models/emotion.onnx"
     
     face_net = cv2.dnn.readNetFromTensorflow(FACE_MODEL, FACE_PROTO)
     
-    # Pre-build DeepFace models to avoid downloading on first request
     try:
-        DeepFace.build_model("Age")
-        DeepFace.build_model("Emotion")
+        age_net = cv2.dnn.readNetFromCaffe(AGE_PROTO, AGE_MODEL)
     except Exception as e:
-        print(f"Error preloading DeepFace models: {e}")
+        print(f"Error loading Age model: {e}")
+        age_net = None
+        
+    try:
+        emotion_net = cv2.dnn.readNetFromONNX(EMOTION_MODEL)
+    except Exception as e:
+        print(f"Error loading Emotion model: {e}")
+        emotion_net = None
 
-    return face_net
+    return face_net, age_net, emotion_net
 
-with st.spinner("⏳ Loading AI models (this may take a few minutes on first run)..."):
-    face_net = load_models()
+face_net, age_net, emotion_net = load_models()
 
-# Age categories
-AGE_CATEGORIES = [
-    "(0-2)",
-    "(4-6)",
-    "(8-12)",
-    "(15-20)",
-    "(25-32)",
-    "(38-43)",
-    "(48-53)",
-    "(60-100)"
-]
+# Categories
+AGE_CATEGORIES = ['(0-2)', '(4-6)', '(8-12)', '(15-20)', '(25-32)', '(38-43)', '(48-53)', '(60-100)']
+EMOTION_CATEGORIES = ['Neutral', 'Happiness', 'Surprise', 'Sadness', 'Anger', 'Disgust', 'Fear', 'Contempt']
 
 def detect_faces(net, frame, conf_threshold=0.7):
     frame_height = frame.shape[0]
@@ -69,7 +67,7 @@ def detect_faces(net, frame, conf_threshold=0.7):
 
     return face_boxes
 
-def extract_face_region(frame, x1, y1, x2, y2, padding_ratio=0.35, min_size=80):
+def extract_face_region(frame, x1, y1, x2, y2, padding_ratio=0.1, min_size=80):
     frame_h, frame_w = frame.shape[:2]
     width = max(1, x2 - x1)
     height = max(1, y2 - y1)
@@ -81,56 +79,43 @@ def extract_face_region(frame, x1, y1, x2, y2, padding_ratio=0.35, min_size=80):
     x2 = min(frame_w, x2 + pad_w)
     y2 = min(frame_h, y2 + pad_h)
 
-    if x2 - x1 < min_size:
-        extra = (min_size - (x2 - x1)) // 2
-        x1 = max(0, x1 - extra)
-        x2 = min(frame_w, x2 + extra)
-
-    if y2 - y1 < min_size:
-        extra = (min_size - (y2 - y1)) // 2
-        y1 = max(0, y1 - extra)
-        y2 = min(frame_h, y2 + extra)
-
     face = frame[y1:y2, x1:x2]
     if face.size == 0:
         return None
     return face
 
 def predict_age(face):
+    if age_net is None:
+        return "(25-32)", 50.0
     try:
-        analysis = DeepFace.analyze(face, actions=['age'], enforce_detection=False, silent=True)
-        predicted_age = analysis[0]['age']
-        
-        if predicted_age < 3:
-            age_group = "(0-2)"
-        elif predicted_age < 7:
-            age_group = "(4-6)"
-        elif predicted_age < 13:
-            age_group = "(8-12)"
-        elif predicted_age < 21:
-            age_group = "(15-20)"
-        elif predicted_age < 33:
-            age_group = "(25-32)"
-        elif predicted_age < 44:
-            age_group = "(38-43)"
-        elif predicted_age < 54:
-            age_group = "(48-53)"
-        else:
-            age_group = "(60-100)"
-        
-        confidence = 75.0
+        blob = cv2.dnn.blobFromImage(face, 1.0, (227, 227), (78.4263377603, 87.7689143744, 114.895847746), swapRB=False)
+        age_net.setInput(blob)
+        preds = age_net.forward()
+        i = preds[0].argmax()
+        age_group = AGE_CATEGORIES[i]
+        confidence = float(preds[0][i]) * 100
         return age_group, confidence
-    except:
+    except Exception as e:
         return "(25-32)", 50.0
 
 def predict_emotion(face):
+    if emotion_net is None:
+        return "Neutral", 50.0
     try:
-        analysis = DeepFace.analyze(face, actions=['emotion'], enforce_detection=False, silent=True)
-        emotions = analysis[0]['emotion']
-        emotion = max(emotions, key=emotions.get)
-        confidence = float(emotions[emotion])
+        gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+        resized = cv2.resize(gray, (64, 64))
+        blob = cv2.dnn.blobFromImage(resized, 1.0, (64, 64), (0,), swapRB=False)
+        emotion_net.setInput(blob)
+        preds = emotion_net.forward()
+        i = preds[0].argmax()
+        emotion = EMOTION_CATEGORIES[i]
+        
+        # Softmax for confidence
+        exp_preds = np.exp(preds[0] - np.max(preds[0]))
+        confidence = float(exp_preds[i] / np.sum(exp_preds)) * 100
+        
         return emotion, confidence
-    except:
+    except Exception as e:
         return "Neutral", 50.0
 
 def process_image(image_path):
@@ -144,7 +129,7 @@ def process_image(image_path):
     for person_id, (x1, y1, x2, y2) in enumerate(face_boxes, start=1):
         face = extract_face_region(frame, x1, y1, x2, y2)
 
-        if face is None or face.size == 0 or face.shape[0] < 40 or face.shape[1] < 40:
+        if face is None or face.shape[0] < 20 or face.shape[1] < 20:
             continue
 
         age, age_confidence = predict_age(face)
