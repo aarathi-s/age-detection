@@ -1,5 +1,4 @@
 opencv-python
 numpy
-deepface
 streamlit
 Pillow
