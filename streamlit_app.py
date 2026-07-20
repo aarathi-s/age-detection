@@ -29,7 +29,8 @@ def load_models():
 
     return face_net
 
-face_net = load_models()
+with st.spinner("⏳ Loading AI models (this may take a few minutes on first run)..."):
+    face_net = load_models()
 
 # Age categories
 AGE_CATEGORIES = [
