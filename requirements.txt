@@ -1,7 +1,5 @@
 opencv-python==4.8.1.78
-numpy==1.24.3
-tensorflow==2.13.0
-tf-keras==2.13.0
+numpy==1.26.4
 deepface==0.0.75
 streamlit==1.28.1
 Pillow==10.0.0
