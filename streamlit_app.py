@@ -19,6 +19,14 @@ def load_models():
     FACE_MODEL = "models/opencv_face_detector_uint8.pb"
     
     face_net = cv2.dnn.readNetFromTensorflow(FACE_MODEL, FACE_PROTO)
+    
+    # Pre-build DeepFace models to avoid downloading on first request
+    try:
+        DeepFace.build_model("Age")
+        DeepFace.build_model("Emotion")
+    except Exception as e:
+        print(f"Error preloading DeepFace models: {e}")
+
     return face_net
 
 face_net = load_models()
